@@ -24,19 +24,38 @@ from coordinator import metrics as hive_metrics
 
 discovery_service = DiscoveryService()
 known_nodes: dict = {}
+rpc_workers: dict = {}  # name -> "ip:port" for RPC endpoints
 model_watcher: ModelWatcher | None = None
 
 
 def on_node_discovered(node_data: dict):
     name = node_data["name"]
     known_nodes[name] = node_data
-    print(f"[Discovery] Node joined: {name} @ {node_data['address']}:{node_data['port']}")
+    props = node_data.get("properties", {})
+    role = props.get("role", "")
+    rpc_port = props.get("rpc_port", "50052")
+    addr = node_data["address"]
+    print(f"[Discovery] Node joined: {name} @ {addr}:{node_data['port']} (role={role})")
+
+    # Track RPC workers
+    if role == "worker":
+        endpoint = f"{addr}:{rpc_port}"
+        rpc_workers[name] = endpoint
+        print(f"[Discovery] RPC worker registered: {endpoint} (total: {len(rpc_workers)})")
 
 
 def on_node_lost(name: str):
     if name in known_nodes:
         del known_nodes[name]
+    if name in rpc_workers:
+        del rpc_workers[name]
+        print(f"[Discovery] RPC worker removed: {name} (remaining: {len(rpc_workers)})")
     print(f"[Discovery] Node left: {name}")
+
+
+def get_rpc_endpoints() -> list:
+    """Get the current list of RPC worker endpoints."""
+    return list(rpc_workers.values())
 
 
 # ── Background task: periodic hardware refresh ───────────────────────────────
@@ -62,7 +81,7 @@ async def lifespan(app: FastAPI):
     local = get_local_capacity()
 
     print(f"\n{'='*60}")
-    print(f"  🐝  HIVE COORDINATOR  –  {hostname}")
+    print(f"  🐼  HIVE COORDINATOR  –  {hostname}")
     print(f"{'='*60}")
     print(f"  VRAM : {local.vram_total_mb:,} MB  ({len(local.gpus)} GPU(s))")
     print(f"  RAM  : {local.ram_total_mb:,} MB")

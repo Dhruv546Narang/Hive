@@ -218,6 +218,26 @@ async def shard_plan_preview(model: str = "qwen3.5", params: str = "8B"):
     return plan.to_dict()
 
 
+@router.get("/api/cluster/workers")
+async def cluster_workers():
+    """List all RPC workers and their endpoints."""
+    from coordinator.main import rpc_workers, known_nodes
+
+    workers = []
+    for name, endpoint in rpc_workers.items():
+        nd = known_nodes.get(name, {})
+        props = nd.get("properties", {})
+        workers.append({
+            "name": name,
+            "endpoint": endpoint,
+            "address": nd.get("address", "?"),
+            "gpu": props.get("gpu", "Unknown"),
+            "vram_mb": int(props.get("vram", 0)),
+            "ram_mb": int(props.get("ram", 0)),
+        })
+    return {"workers": workers, "total": len(workers)}
+
+
 # ── Prometheus metrics endpoint ──────────────────────────────────────────────
 
 @router.get("/metrics")

@@ -7,7 +7,8 @@ class HiveConfig(BaseModel):
     cluster_secret: str = "hive-secret-123"
     model_dir: str = os.path.expanduser("~/hive/models")
     coordinator_port: int = 8000
-    worker_port: int = 8080
+    worker_port: int = 50052      # llama.cpp rpc-server port
+    inference_port: int = 8081    # distributed llama-server API port
     offload_factor: float = 0.6
 
 
