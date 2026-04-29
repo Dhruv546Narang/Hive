@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hive-inference"
+version = "0.1.0"
+description = "Distributed Local AI Inference daemon"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "zeroconf>=0.131.0",
+    "watchdog>=3.0.0",
+    "tomli>=2.0.1; python_version < '3.11'",
+    "httpx>=0.24.1",
+    "prometheus-client>=0.17.0"
+]
+
+[project.scripts]
+hive = "cli:main"
+
+[tool.setuptools]
+packages = ["coordinator", "worker"]
+py-modules = ["cli"]

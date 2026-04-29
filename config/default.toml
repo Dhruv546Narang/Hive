@@ -1,0 +1,5 @@
+cluster_secret = "hive-secret-123"
+model_dir = "models"
+coordinator_port = 8000
+worker_port = 8080
+offload_factor = 0.6

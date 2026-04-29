@@ -1,0 +1,268 @@
+Hive
+Distributed Local AI Inference
+Full Product & Engineering Plan  —  v1.0
+
+
+1. What is Hive
+Hive is a distributed local AI inference daemon that pools the RAM and VRAM of multiple laptops over a LAN to run large language models that no single machine could run alone. Two laptops with 6 GB VRAM each become a 12 GB cluster capable of running a 40B-parameter model. Three laptops can reach 70B+.
+
+Hive handles everything automatically: it discovers machines on the network, measures total available memory, assigns roles (coordinator vs worker), splits model layers across GPUs using llama.cpp RPC mode, and presents a single OpenAI-compatible API endpoint to any client.
+
+2. Core Concept
+How it works
+When Hive starts on a machine, it broadcasts its presence over mDNS and connects to any other Hive nodes on the same LAN that share the same cluster secret. The first node to start becomes the coordinator. The coordinator measures total cluster memory, determines which models fit, assigns layer shards to each worker, and starts accepting inference requests.
+
+Inference requests arrive at the coordinator over a standard HTTP API. The coordinator splits the prompt across workers using llama.cpp's RPC protocol — each worker runs a contiguous slice of the model's layers and passes activations to the next node in the pipeline. Tokens stream back to the client in real time.
+
+What makes it different from Hyperspace Pods
+Hive is LAN-first — no relay server required for basic use. Zero latency overhead from the internet.
+Hive is role-aware — it automatically assigns coordinator vs worker based on hardware capability.
+Hive has a built-in capacity UI — shows exactly which models are unlocked, which are locked, and why.
+Hive uses a simple shared secret for auth — no account, no cloud dependency, pure peer trust.
+
+3. Hardware
+Dev cluster
+Worker A
+i5-13420H · RTX 4050 6 GB VRAM · 16 GB DDR5
+Worker B
+i5-13420H · RTX 4050 6 GB VRAM · 16 GB DDR5
+Worker C
+Heterogeneous laptop (CPU-only, specs TBD)
+Network
+LAN (~1 Gbps) · mDNS for peer discovery
+
+Memory math
+2 nodes (A + B)
+12 GB VRAM + 32 GB RAM → ~40B model fits
+3 nodes (A + B + C)
+12 GB VRAM + 32+ GB RAM → 70B possible (CPU offload)
+Rule of thumb
+Q4_K_M quantization: ~0.5 GB per 1B params
+
+4. Architecture
+Layer overview
+Client layer — React web UI, OpenAI-compatible REST API (/v1/chat/completions), CLI
+Coordinator node — FastAPI process running on one machine; handles routing, shard planning, node discovery
+Worker nodes — llama.cpp rpc-server process on each machine; executes a layer shard on GPU or CPU
+LAN transport — direct TCP between nodes; mDNS for discovery; shared secret for auth
+Model store — local folder (~/hive/models/) on each machine; Hive watches for new GGUF files
+Observability — Prometheus metrics: tok/s per node, VRAM usage, latency, node health
+
+Coordinator responsibilities
+Accept incoming inference requests
+Run shard planner: measure each node's VRAM + RAM, split model layers accordingly
+Route requests to workers via llama.cpp RPC
+Stream tokens back to client
+Run mDNS broadcaster and listener
+Validate shared secret on node join
+Serve the React dashboard
+
+Worker responsibilities
+Run llama.cpp rpc-server on assigned port (default: 8080)
+Load assigned layer shard into GPU memory
+Respond to coordinator RPC calls
+Report VRAM usage and health metrics
+Watch ~/hive/models/ and report available models to coordinator
+
+Role assignment logic
+On startup, each Hive node announces itself with: hostname, VRAM available, RAM available, and whether it already sees a coordinator on the network. If no coordinator exists, the node with the most VRAM becomes coordinator. If tied, earliest to start wins. The coordinator role can be manually overridden via config flag.
+
+5. Model Capacity System
+This is the flagship UX feature of Hive. The dashboard shows a model list with three states:
+
+Available — model GGUF is present in ~/hive/models/ on at least one node and fits in cluster memory. Ready to run.
+Downloadable — model fits in current cluster memory but GGUF is not yet downloaded. Shows a Download button that opens the Hugging Face page in the browser.
+Locked — model does not fit in current cluster memory. Shows exactly why: e.g. 'Needs 48 GB VRAM, cluster has 12 GB.'
+
+How capacity is calculated
+Total usable memory = sum of each node's (VRAM + RAM * offload_factor). The offload factor is 0.6 by default — RAM is slower so Hive conservatively uses 60% of it for model layers. A model's required memory is estimated from its parameter count and quantization level using the Q4_K_M rule of thumb (~0.5 GB per 1B params).
+
+Model list (built-in)
+Model
+Params
+VRAM (Q4)
+Notes
+Mixtral 8x7B Q4_K_M
+~47B active
+~24 GB
+Dev default — fits A+B
+Llama 3.1 8B
+8B
+~5 GB
+Fits on single node
+Qwen 2.5 14B
+14B
+~9 GB
+Fits on single node
+Llama 3.1 70B Q4_K_M
+70B
+~40 GB
+Needs A+B+C
+Qwen 2.5 72B Q4_K_M
+72B
+~42 GB
+Prod target; needs A+B+C
+Llama 3.1 405B Q4_K_M
+405B
+~230 GB
+Locked unless large cluster
+
+Model download flow
+Hive does not manage downloads. When a user clicks Download on a model:
+Browser opens the Hugging Face GGUF page for that model.
+User downloads via huggingface-cli or browser and places the file in ~/hive/models/.
+Hive's folder watcher detects the new file and adds it to the available list automatically.
+Coordinator re-runs the shard planner and makes the model selectable.
+
+6. Node Authentication
+Hive uses a shared secret for cluster auth. All nodes on the same cluster must be configured with the same secret string. On node join, the coordinator validates the secret via a simple HMAC handshake. Nodes that fail auth are rejected.
+
+This is LAN-trust-based security: anyone on your local network with the secret can join the cluster. This is intentional for v1 — the threat model is a home or small office LAN, not a hostile network. mTLS or per-node certificates are a later-stage concern.
+
+Secret config
+~/.hive/config.toml  →  cluster_secret = 'your-secret'
+Handshake
+HMAC-SHA256 of nonce + secret on join
+Scope
+LAN only in v1. Internet relay is a paid later feature.
+
+7. Tech Stack
+Layer
+Technology
+Reason
+Inference engine
+llama.cpp (RPC mode)
+Best perf on consumer GPU; built-in multi-node RPC
+Control plane
+Python + FastAPI
+Fast to build, async-native, easy OpenAI API shim
+Node discovery
+mDNS (zeroconf)
+Zero config; works on any LAN without a router
+Auth
+HMAC-SHA256 shared secret
+Simple, secure enough for LAN, zero infra
+Web UI
+React + Vite
+Fast iteration; Tailwind for styling
+Metrics
+Prometheus + custom exporter
+Standard, plugs into Grafana if needed
+Model format
+GGUF (Q4_K_M)
+Best quality/size tradeoff for consumer GPU
+Config
+TOML (~/.hive/config.toml)
+Human-readable, minimal
+Package
+pip install hive-inference
+Easy install on each laptop
+
+8. Build Order
+Each phase produces something testable before moving on.
+
+Phase 1 — Plumbing (prove the LAN works)
+Build llama.cpp with CUDA support on both identical laptops
+Start rpc-server on Worker B, connect from Worker A using llama.cpp RPC client
+Run a small model (Llama 3.1 8B) split across both GPUs
+Verify tokens stream correctly end-to-end
+Exit criterion: inference works across two laptops with no coordinator yet.
+
+Phase 2 — Coordinator core
+FastAPI app: /v1/chat/completions endpoint (OpenAI-compatible)
+Shard planner: takes node list + model metadata, returns layer assignment per node
+RPC orchestrator: coordinates multi-node inference, streams tokens back
+Config loader: reads ~/.hive/config.toml (cluster_secret, model_dir, port)
+Exit criterion: curl /v1/chat/completions returns streaming tokens from a 2-node cluster.
+
+Phase 3 — Discovery & auth
+mDNS broadcaster: each node announces hostname + VRAM + port on startup
+mDNS listener: coordinator auto-discovers workers, no manual IP config
+HMAC handshake: reject nodes without correct cluster_secret
+Role election: highest-VRAM node becomes coordinator; tie broken by first-seen
+Exit criterion: starting Hive on two laptops auto-forms a cluster with no manual config.
+
+Phase 4 — Capacity system + model watcher
+Capacity calculator: total VRAM + RAM * offload_factor per cluster
+Model registry: built-in list of popular GGUFs with parameter counts and HF URLs
+Folder watcher: watchdog on ~/hive/models/, auto-registers new GGUF files
+Status classifier: Available / Downloadable / Locked per model
+Exit criterion: adding a new GGUF to the folder makes it appear as Available without restart.
+
+Phase 5 — React dashboard
+Node panel: each connected machine with VRAM bar, RAM bar, role badge, tok/s
+Model list: Available (green), Downloadable (blue, opens HF link), Locked (gray + reason)
+Active inference view: which model is loaded, current prompt, streaming output
+Settings: cluster secret, model dir, port
+Exit criterion: the dashboard accurately reflects real cluster state in real time.
+
+Phase 6 — Observability & polish
+Prometheus exporter: tok/s, VRAM used/total, RAM used/total, latency p50/p95, node count
+Graceful degradation: if a worker drops mid-inference, coordinator re-plans on remaining nodes
+CLI: hive start, hive status, hive models, hive stop
+README + install script for fresh laptops
+Exit criterion: the project is ready for a public GitHub release.
+
+9. Repository Structure
+hive/
+  coordinator/
+    main.py          # FastAPI app entrypoint
+    router.py        # Request routing logic
+    shard_planner.py # Layer assignment per node
+    rpc_client.py    # llama.cpp RPC orchestrator
+    discovery.py     # mDNS broadcaster + listener
+    auth.py          # HMAC shared secret
+    capacity.py      # Memory math + model status
+    model_watcher.py # Folder watcher for GGUFs
+    metrics.py       # Prometheus exporter
+  worker/
+    main.py          # Worker daemon entrypoint
+    rpc_server.py    # llama.cpp rpc-server wrapper
+  ui/                # React + Vite dashboard
+    src/
+      NodePanel.jsx
+      ModelList.jsx
+      InferenceView.jsx
+  config/
+    default.toml     # Default config template
+  models/            # GGUF registry (built-in list)
+    registry.json
+  install.sh         # One-liner setup for fresh laptop
+  pyproject.toml
+  README.md
+
+10. Deferred for Later
+Item
+Status
+Notes
+Relay server tier
+Later
+Paid feature — lets nodes connect over internet, not just LAN
+mTLS node auth
+Later
+Replace shared secret with per-node certs for hostile networks
+Model download manager
+Later
+In-app download progress; for now users download manually to ~/hive/models/
+Windows support
+Later
+v1 targets Linux/macOS; WSL2 workaround exists
+Multi-cluster federation
+Later
+Connecting multiple Hive clusters together
+Web relay for remote UI
+Later
+Access dashboard from outside LAN
+Fine-tuning / training
+Later
+Inference-only for v1
+
+11. Open Questions
+Does llama.cpp RPC mode support streaming tokens natively, or do we need to poll and chunk?
+What is the actual bandwidth requirement for passing activations between nodes at 70B scale? Need to benchmark.
+Should the coordinator also run a worker shard, or be coordination-only? (Current plan: coordinator is also a worker on identical laptops.)
+How to handle a node joining mid-inference? (v1 answer: wait for current inference to finish, then re-plan.)
+Config sync across nodes — does each node need its own config.toml or should the coordinator push config to workers?
+
+
+Hive · Product & Engineering Plan · v1.0 · github.com/Dhruv546Narang
