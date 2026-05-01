@@ -13,14 +13,28 @@ from coordinator.config import settings
 from coordinator import metrics as hive_metrics
 
 
-OLLAMA_BASE = "http://localhost:11434"
+def get_inference_base() -> str:
+    """Get the active inference API base URL.
+    Prefers our distributed llama-server if running, falls back to Ollama.
+    """
+    # Quick health check on our distributed server
+    try:
+        import httpx
+        r = httpx.get(f"http://127.0.0.1:{settings.inference_port}/health", timeout=0.5)
+        if r.status_code == 200:
+            return f"http://127.0.0.1:{settings.inference_port}"
+    except Exception:
+        pass
+    
+    # Fallback to Ollama
+    return "http://localhost:11434"
 
 
 async def ollama_health_check() -> bool:
     """Check whether Ollama is reachable."""
     try:
         async with httpx.AsyncClient() as client:
-            r = await client.get(f"{OLLAMA_BASE}/", timeout=3.0)
+            r = await client.get(f"http://localhost:11434/", timeout=3.0)
             return r.status_code == 200
     except Exception:
         return False
@@ -30,7 +44,7 @@ async def ollama_list_models() -> list:
     """Query Ollama for locally-installed models."""
     try:
         async with httpx.AsyncClient() as client:
-            r = await client.get(f"{OLLAMA_BASE}/api/tags", timeout=5.0)
+            r = await client.get(f"http://localhost:11434/api/tags", timeout=5.0)
             if r.status_code == 200:
                 data = r.json()
                 return data.get("models", [])
@@ -44,7 +58,7 @@ async def ollama_model_info(model_name: str) -> Optional[dict]:
     try:
         async with httpx.AsyncClient() as client:
             r = await client.post(
-                f"{OLLAMA_BASE}/api/show",
+                f"http://localhost:11434/api/show",
                 json={"name": model_name},
                 timeout=10.0,
             )
@@ -59,7 +73,7 @@ async def ollama_running_models() -> list:
     """Get currently loaded/running models in Ollama."""
     try:
         async with httpx.AsyncClient() as client:
-            r = await client.get(f"{OLLAMA_BASE}/api/ps", timeout=5.0)
+            r = await client.get(f"http://localhost:11434/api/ps", timeout=5.0)
             if r.status_code == 200:
                 data = r.json()
                 return data.get("models", [])
@@ -76,10 +90,12 @@ async def chat_completion(
     max_tokens: int = 1024,
 ) -> Dict[str, Any]:
     """
+    """
     Send a non-streaming chat completion via Ollama's OpenAI compat endpoint.
     Returns the full response dict.
     """
-    url = f"{OLLAMA_BASE}/v1/chat/completions"
+    base_url = get_inference_base()
+    url = f"{base_url}/v1/chat/completions"
     payload = {
         "model": model,
         "messages": [{"role": m.role, "content": m.content} if hasattr(m, 'role') else m for m in messages],
@@ -115,10 +131,12 @@ async def chat_completion_stream(
     max_tokens: int = 1024,
 ) -> AsyncGenerator[bytes, None]:
     """
+    """
     Stream a chat completion via Ollama's OpenAI compat endpoint.
     Yields raw SSE bytes as they arrive.
     """
-    url = f"{OLLAMA_BASE}/v1/chat/completions"
+    base_url = get_inference_base()
+    url = f"{base_url}/v1/chat/completions"
     payload = {
         "model": model,
         "messages": [{"role": m.role, "content": m.content} if hasattr(m, 'role') else m for m in messages],

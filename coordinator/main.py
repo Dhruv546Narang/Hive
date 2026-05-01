@@ -26,6 +26,7 @@ discovery_service = DiscoveryService()
 known_nodes: dict = {}
 rpc_workers: dict = {}  # name -> "ip:port" for RPC endpoints
 model_watcher: ModelWatcher | None = None
+inference_server = None
 
 
 def on_node_discovered(node_data: dict):
@@ -75,7 +76,7 @@ async def hardware_refresh_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global model_watcher
+    global model_watcher, inference_server
 
     hostname = socket.gethostname()
     local = get_local_capacity()
@@ -106,6 +107,18 @@ async def lifespan(app: FastAPI):
     model_watcher = ModelWatcher(model_dir)
     model_watcher.start()
 
+    # Start inference server
+    from coordinator.inference import InferenceServer
+    from coordinator.binary_manager import get_binary_path, ensure_binaries
+    
+    # Auto-download llama.cpp binaries if not present
+    await ensure_binaries()
+    
+    llama_bin = get_binary_path("llama-server")
+    inference_server = InferenceServer(str(llama_bin), port=settings.inference_port)
+    # We don't start the model yet since we need the user to pick one, 
+    # but the server instance is ready.
+
     # Start background hardware refresh
     refresh_task = asyncio.create_task(hardware_refresh_loop())
 
@@ -113,6 +126,8 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     refresh_task.cancel()
+    if inference_server:
+        inference_server.stop()
     model_watcher.stop()
     await discovery_service.stop()
     print("\n[Hive] Coordinator stopped.\n")

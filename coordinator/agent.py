@@ -13,8 +13,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Callable, List
 
 from coordinator.tools import TOOLS, execute_tool
-
-OLLAMA_BASE = "http://localhost:11434"
+from coordinator.rpc_client import get_inference_base
 
 SYSTEM_PROMPT = """You are Hive, a local AI coding assistant running directly on the user's machine.
 You have direct access to their filesystem and terminal through tools.
@@ -86,11 +85,12 @@ class HiveAgent:
         start_time = time.time()
 
         for _round in range(self.max_tool_rounds):
+            full_messages = [{"role": "system", "content": self.system_msg}] + self.messages
             if on_token:
                 # Streaming mode: stream tokens and detect tool calls
-                response_data, streamed_content = await self._call_ollama_stream(on_token)
+                response_data, streamed_content = await self._call_ollama_stream(on_token, full_messages)
             else:
-                response_data = await self._call_ollama()
+                response_data = await self._call_ollama(full_messages)
                 streamed_content = None
 
             response_msg = response_data.get("message", {})
@@ -154,23 +154,23 @@ class HiveAgent:
         self.total_messages += 1
         return result
 
-    async def _call_ollama(self) -> dict:
+    async def _call_ollama(self, full_messages: list) -> dict:
         """Non-streaming call (used during tool-calling rounds)."""
         payload = {
             "model": self.model,
-            "messages": [{"role": "system", "content": self.system_msg}] + self.messages,
+            "messages": full_messages,
             "tools": TOOLS,
             "stream": False,
-            "keep_alive": "30m",
+            "options": {"temperature": 0.3, "num_ctx": 16384}
         }
+
+        base_url = get_inference_base()
         async with httpx.AsyncClient() as client:
-            r = await client.post(
-                f"{OLLAMA_BASE}/api/chat", json=payload, timeout=120.0,
-            )
+            r = await client.post(f"{base_url}/api/chat", json=payload, timeout=120.0)
             r.raise_for_status()
             return r.json()
 
-    async def _call_ollama_stream(self, on_token: Callable) -> tuple:
+    async def _call_ollama_stream(self, on_token: Callable, full_messages: list) -> tuple:
         """
         Streaming call. Yields tokens via on_token callback.
         If the model returns tool_calls, they come as a single done=true message
@@ -179,20 +179,21 @@ class HiveAgent:
         """
         payload = {
             "model": self.model,
-            "messages": [{"role": "system", "content": self.system_msg}] + self.messages,
+            "messages": full_messages,
             "tools": TOOLS,
             "stream": True,
-            "keep_alive": "30m",
+            "options": {"temperature": 0.3, "num_ctx": 16384}
         }
 
         content_buffer = ""
         final_data = {}
         has_tool_calls = False
         tool_calls = None
+        base_url = get_inference_base()
 
         async with httpx.AsyncClient() as client:
             async with client.stream(
-                "POST", f"{OLLAMA_BASE}/api/chat", json=payload, timeout=120.0
+                "POST", f"{base_url}/api/chat", json=payload, timeout=120.0
             ) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():
