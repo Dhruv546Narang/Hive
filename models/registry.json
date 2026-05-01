@@ -1,26 +1,102 @@
 [
     {
-        "id": "mixtral-8x7b-q4",
-        "name": "Mixtral 8x7B Q4_K_M",
-        "params": "47B",
-        "vram_gb": 24,
-        "notes": "Dev default",
-        "hf_url": "https://huggingface.co/TheBloke/Mixtral-8x7B-v0.1-GGUF"
-    },
-    {
-        "id": "llama-3.1-8b",
-        "name": "Llama 3.1 8B Q4_K_M",
-        "params": "8B",
+        "id": "qwen2.5-7b",
+        "name": "Qwen 2.5 7B Instruct",
+        "params": "7B",
+        "quant": "Q4_K_M",
         "vram_gb": 5,
-        "notes": "Fits on single node",
-        "hf_url": "https://huggingface.co/lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF"
+        "size_gb": 4.7,
+        "repo": "Qwen/Qwen2.5-7B-Instruct-GGUF",
+        "filename": "qwen2.5-7b-instruct-q4_k_m.gguf"
     },
     {
-        "id": "qwen-2.5-14b",
-        "name": "Qwen 2.5 14B Q4_K_M",
+        "id": "qwen2.5-14b",
+        "name": "Qwen 2.5 14B Instruct",
         "params": "14B",
+        "quant": "Q4_K_M",
         "vram_gb": 9,
-        "notes": "Fits on single node",
-        "hf_url": "https://huggingface.co/Qwen/Qwen2.5-14B-Instruct-GGUF"
+        "size_gb": 8.9,
+        "repo": "Qwen/Qwen2.5-14B-Instruct-GGUF",
+        "filename": "qwen2.5-14b-instruct-q4_k_m.gguf"
+    },
+    {
+        "id": "qwen2.5-32b",
+        "name": "Qwen 2.5 32B Instruct",
+        "params": "32B",
+        "quant": "Q4_K_M",
+        "vram_gb": 20,
+        "size_gb": 19.8,
+        "repo": "Qwen/Qwen2.5-32B-Instruct-GGUF",
+        "filename": "qwen2.5-32b-instruct-q4_k_m.gguf"
+    },
+    {
+        "id": "llama3.1-8b",
+        "name": "Llama 3.1 8B Instruct",
+        "params": "8B",
+        "quant": "Q4_K_M",
+        "vram_gb": 5,
+        "size_gb": 4.9,
+        "repo": "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF",
+        "filename": "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"
+    },
+    {
+        "id": "llama3.1-70b",
+        "name": "Llama 3.1 70B Instruct",
+        "params": "70B",
+        "quant": "Q4_K_M",
+        "vram_gb": 42,
+        "size_gb": 40.8,
+        "repo": "bartowski/Meta-Llama-3.1-70B-Instruct-GGUF",
+        "filename": "Meta-Llama-3.1-70B-Instruct-Q4_K_M.gguf"
+    },
+    {
+        "id": "deepseek-r1-7b",
+        "name": "DeepSeek R1 7B",
+        "params": "7B",
+        "quant": "Q4_K_M",
+        "vram_gb": 5,
+        "size_gb": 4.7,
+        "repo": "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF",
+        "filename": "DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf"
+    },
+    {
+        "id": "deepseek-r1-32b",
+        "name": "DeepSeek R1 32B",
+        "params": "32B",
+        "quant": "Q4_K_M",
+        "vram_gb": 20,
+        "size_gb": 19.0,
+        "repo": "bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF",
+        "filename": "DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf"
+    },
+    {
+        "id": "phi-4-14b",
+        "name": "Phi 4 14B",
+        "params": "14B",
+        "quant": "Q4_K_M",
+        "vram_gb": 9,
+        "size_gb": 8.4,
+        "repo": "bartowski/phi-4-GGUF",
+        "filename": "phi-4-Q4_K_M.gguf"
+    },
+    {
+        "id": "gemma3-12b",
+        "name": "Gemma 3 12B Instruct",
+        "params": "12B",
+        "quant": "Q4_K_M",
+        "vram_gb": 8,
+        "size_gb": 7.3,
+        "repo": "bartowski/google_gemma-3-12b-it-GGUF",
+        "filename": "google_gemma-3-12b-it-Q4_K_M.gguf"
+    },
+    {
+        "id": "mistral-7b",
+        "name": "Mistral 7B Instruct v0.3",
+        "params": "7B",
+        "quant": "Q4_K_M",
+        "vram_gb": 5,
+        "size_gb": 4.4,
+        "repo": "bartowski/Mistral-7B-Instruct-v0.3-GGUF",
+        "filename": "Mistral-7B-Instruct-v0.3-Q4_K_M.gguf"
     }
 ]

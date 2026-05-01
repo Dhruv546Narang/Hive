@@ -345,18 +345,95 @@ def cmd_status(args):
         print(f"{ROSE}Error: {e}{RESET}"); sys.exit(1)
 
 def cmd_models(args):
-    import httpx
+    from coordinator.model_downloader import get_registry, list_downloaded, is_downloaded
+    registry = get_registry()
+    downloaded = list_downloaded()
+    dl_names = {d['filename'] for d in downloaded}
+
+    print(f"\n  {BOLD}{AMBER}Available Models{RESET}")
+    print(f"  {'='*58}")
+    print(f"  {GRAY}{'Name':<28} {'Size':>7} {'VRAM':>7} {'Status':>10}{RESET}")
+    print(f"  {GRAY}{'-'*58}{RESET}")
+    for m in registry:
+        fname = m.get('filename', '')
+        if fname in dl_names or is_downloaded(fname):
+            status = f"{GREEN}installed{RESET}"
+            icon = f"{GREEN}*{RESET}"
+        else:
+            status = f"{GRAY}available{RESET}"
+            icon = f"{GRAY}o{RESET}"
+        name = m.get('name', m['id'])
+        if len(name) > 26: name = name[:24] + '..'
+        size = f"{m.get('size_gb', '?')} GB"
+        vram = f"{m.get('vram_gb', '?')} GB"
+        print(f"  {icon} {WHITE}{name:<26}{RESET} {size:>7} {vram:>7} {status:>10}")
+
+    if downloaded:
+        print(f"\n  {BOLD}{AMBER}Downloaded Models{RESET}")
+        print(f"  {GRAY}{'-'*58}{RESET}")
+        for d in downloaded:
+            print(f"  {GREEN}*{RESET} {WHITE}{d['filename']}{RESET}  ({d['size_gb']} GB)")
+
+    print(f"\n  {GRAY}Pull a model: hive pull <name>{RESET}")
+    print(f"  {GRAY}Example: hive pull qwen2.5-7b{RESET}\n")
+
+
+def cmd_pull(args):
+    import asyncio
+    from coordinator.model_downloader import pull_model, find_model, is_downloaded
+
+    query = args.model_name
+    if not query:
+        print(f"  {ROSE}Usage: hive pull <model-name>{RESET}")
+        print(f"  {GRAY}Example: hive pull qwen2.5-7b{RESET}")
+        print(f"  {GRAY}Run 'hive models' to see available models{RESET}")
+        return
+
+    # Show what we're about to download
+    model = find_model(query)
+    if model:
+        if is_downloaded(model['filename']):
+            print(f"  {GREEN}*{RESET} {model['name']} is already downloaded")
+            print(f"  {GRAY}Path: ~/.hive/models/{model['filename']}{RESET}")
+            return
+        print(f"\n  {AMBER}Pulling {model['name']}{RESET}")
+        print(f"  {GRAY}Size: ~{model.get('size_gb', '?')} GB  |  VRAM: ~{model.get('vram_gb', '?')} GB  |  Quant: {model.get('quant', 'Q4_K_M')}{RESET}")
+        print(f"  {GRAY}Repo: {model['repo']}{RESET}")
+        print()
+    else:
+        print(f"\n  {AMBER}Pulling from: {query}{RESET}\n")
+
+    def on_progress(downloaded, total):
+        pct = downloaded * 100 // total
+        dl_gb = downloaded / (1024**3)
+        total_gb = total / (1024**3)
+        bar_w = 40
+        filled = pct * bar_w // 100
+        bar = chr(9608) * filled + chr(9617) * (bar_w - filled)
+        sys.stdout.write(f"\r  [{bar}] {pct}% ({dl_gb:.1f}/{total_gb:.1f} GB)")
+        sys.stdout.flush()
+        if downloaded >= total:
+            sys.stdout.write("\n")
+
+    def on_status(msg):
+        print(f"  {GRAY}{msg}{RESET}")
+
     try:
-        r=httpx.get(f"http://localhost:{settings.coordinator_port}/api/cluster/status",timeout=5.0)
-        r.raise_for_status(); d=r.json()
-        for m in d.get("ollama_models",[]):
-            print(f"  {GREEN}✓{RESET} {m['name']}  ({m.get('size',0)/(1024**3):.1f} GB)")
-        for m in d.get("registry_models",[]):
-            s=m.get("status","?")
-            ic={" available":f"{GREEN}✓{RESET}","downloadable":f"{SKY}↓{RESET}","locked":f"{GRAY}🔒{RESET}"}.get(s,"?")
-            print(f"  {ic} {m['name']}  ({m.get('vram_gb','?')} GB)  [{s}]")
+        result = asyncio.run(pull_model(
+            query,
+            on_progress=on_progress,
+            on_status=on_status,
+        ))
+        if result:
+            print(f"\n  {GREEN}*{RESET} Model ready: {result}")
+            print(f"  {GRAY}Use with: hive chat -m {result.stem}{RESET}\n")
+        else:
+            print(f"\n  {ROSE}Download failed or model not found{RESET}")
+    except KeyboardInterrupt:
+        print(f"\n  {GRAY}Download cancelled (partial file saved, will resume){RESET}")
     except Exception as e:
-        print(f"{ROSE}Error: {e}{RESET}"); sys.exit(1)
+        print(f"\n  {ROSE}Error: {e}{RESET}")
+
 
 # ── Chat Command (the main event) ────────────────────────────────────────
 def cmd_chat(args):
@@ -714,8 +791,10 @@ def main():
     sub.add_parser("worker", help="Start worker daemon")
     sub.add_parser("status", help="Cluster status")
     sub.add_parser("models", help="List models")
+    pp = sub.add_parser("pull", help="Download a model")
+    pp.add_argument("model_name", nargs="?", default="", help="Model name or HF repo")
     args = parser.parse_args()
-    cmds = {"chat":cmd_chat,"start":cmd_start,"worker":cmd_worker,"status":cmd_status,"models":cmd_models}
+    cmds = {"chat":cmd_chat,"start":cmd_start,"worker":cmd_worker,"status":cmd_status,"models":cmd_models,"pull":cmd_pull}
     h = cmds.get(args.command)
     if h: h(args)
     else: args.model="qwen3.5"; cmd_chat(args)
