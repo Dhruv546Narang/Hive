@@ -88,19 +88,23 @@ class HiveAgent:
             full_messages = [{"role": "system", "content": self.system_msg}] + self.messages
             if on_token:
                 # Streaming mode: stream tokens and detect tool calls
-                response_data, streamed_content = await self._call_ollama_stream(on_token, full_messages)
+                response_data, streamed_content = await self._call_inference_stream(on_token, full_messages)
             else:
-                response_data = await self._call_ollama(full_messages)
+                response_data = await self._call_inference(full_messages)
                 streamed_content = None
 
             response_msg = response_data.get("message", {})
 
             # Accumulate stats
-            result.eval_count += response_data.get("eval_count", 0)
-            result.eval_duration_ns += response_data.get("eval_duration", 0)
-            result.prompt_eval_count += response_data.get("prompt_eval_count", 0)
-            if response_data.get("load_duration"):
-                result.load_duration_ns += response_data["load_duration"]
+            if "usage" in response_data:
+                result.eval_count += response_data["usage"].get("completion_tokens", 0)
+                result.prompt_eval_count += response_data["usage"].get("prompt_tokens", 0)
+            else:
+                result.eval_count += response_data.get("eval_count", 0)
+                result.eval_duration_ns += response_data.get("eval_duration", 0)
+                result.prompt_eval_count += response_data.get("prompt_eval_count", 0)
+                if response_data.get("load_duration"):
+                    result.load_duration_ns += response_data["load_duration"]
 
             tool_calls = response_msg.get("tool_calls")
             if not tool_calls:
@@ -154,75 +158,90 @@ class HiveAgent:
         self.total_messages += 1
         return result
 
-    async def _call_ollama(self, full_messages: list) -> dict:
-        """Non-streaming call (used during tool-calling rounds)."""
+    async def _call_inference(self, full_messages: list) -> dict:
+        """Non-streaming OpenAI-compatible call."""
         payload = {
             "model": self.model,
             "messages": full_messages,
             "tools": TOOLS,
             "stream": False,
-            "options": {"temperature": 0.3, "num_ctx": 16384}
+            "temperature": 0.3,
+            "max_tokens": 8192
         }
 
         base_url = get_inference_base()
         async with httpx.AsyncClient() as client:
-            r = await client.post(f"{base_url}/api/chat", json=payload, timeout=120.0)
+            r = await client.post(f"{base_url}/v1/chat/completions", json=payload, timeout=120.0)
             r.raise_for_status()
-            return r.json()
+            data = r.json()
+            return {
+                "message": data["choices"][0]["message"],
+                "usage": data.get("usage", {})
+            }
 
-    async def _call_ollama_stream(self, on_token: Callable, full_messages: list) -> tuple:
-        """
-        Streaming call. Yields tokens via on_token callback.
-        If the model returns tool_calls, they come as a single done=true message
-        (no streaming), so we detect that and return normally.
-        Returns (response_data_dict, streamed_content_or_None).
-        """
+    async def _call_inference_stream(self, on_token: Callable, full_messages: list) -> tuple:
+        """Streaming OpenAI-compatible call with chunked tool call assembly."""
         payload = {
             "model": self.model,
             "messages": full_messages,
             "tools": TOOLS,
             "stream": True,
-            "options": {"temperature": 0.3, "num_ctx": 16384}
+            "temperature": 0.3,
+            "max_tokens": 8192
         }
 
         content_buffer = ""
-        final_data = {}
-        has_tool_calls = False
-        tool_calls = None
+        tool_calls_acc = []
         base_url = get_inference_base()
 
         async with httpx.AsyncClient() as client:
             async with client.stream(
-                "POST", f"{base_url}/api/chat", json=payload, timeout=120.0
+                "POST", f"{base_url}/v1/chat/completions", json=payload, timeout=120.0
             ) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():
-                    if not line.strip():
+                    line = line.strip()
+                    if not line or line == "data: [DONE]":
                         continue
+                    if line.startswith("data: "):
+                        line = line[6:]
+                    
                     try:
                         chunk = json.loads(line)
                     except json.JSONDecodeError:
                         continue
 
-                    msg = chunk.get("message", {})
+                    choices = chunk.get("choices", [])
+                    if not choices:
+                        continue
 
-                    # Check for tool calls (comes as single done message)
-                    if msg.get("tool_calls"):
-                        has_tool_calls = True
-                        tool_calls = msg["tool_calls"]
-                        final_data = chunk
-                        break
+                    delta = choices[0].get("delta", {})
+
+                    # Accumulate chunked tool calls
+                    if "tool_calls" in delta:
+                        for tc in delta["tool_calls"]:
+                            idx = tc.get("index", 0)
+                            while len(tool_calls_acc) <= idx:
+                                tool_calls_acc.append({
+                                    "id": "", "type": "function", 
+                                    "function": {"name": "", "arguments": ""}
+                                })
+                            if tc.get("id"): 
+                                tool_calls_acc[idx]["id"] = tc["id"]
+                            fn = tc.get("function", {})
+                            if fn.get("name"): 
+                                tool_calls_acc[idx]["function"]["name"] += fn["name"]
+                            if fn.get("arguments"): 
+                                tool_calls_acc[idx]["function"]["arguments"] += fn["arguments"]
 
                     # Stream text content
-                    token = msg.get("content", "")
+                    token = delta.get("content", "")
                     if token:
-                        # Strip think tags on-the-fly
                         if "<think>" in content_buffer + token:
                             content_buffer += token
                             continue
                         if content_buffer and "</think>" in content_buffer + token:
                             content_buffer += token
-                            # Extract content after </think>
                             idx = content_buffer.find("</think>")
                             if idx >= 0:
                                 after = content_buffer[idx + 8:]
@@ -234,17 +253,10 @@ class HiveAgent:
                         content_buffer += token
                         on_token(token)
 
-                    if chunk.get("done"):
-                        final_data = chunk
-                        break
-
-        if has_tool_calls:
-            # Return as if non-streaming, with tool_calls in message
-            final_data["message"] = {"role": "assistant", "content": "", "tool_calls": tool_calls}
-            return final_data, None
+        if tool_calls_acc:
+            return {"message": {"role": "assistant", "content": content_buffer, "tool_calls": tool_calls_acc}}, None
         else:
-            final_data["message"] = {"role": "assistant", "content": content_buffer}
-            return final_data, content_buffer
+            return {"message": {"role": "assistant", "content": content_buffer}}, content_buffer
 
     def _strip_think_tags(self, text: str) -> str:
         return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
