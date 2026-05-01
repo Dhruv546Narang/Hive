@@ -74,7 +74,7 @@ def estimate_layer_count(params_str: str) -> int:
         return 32  # safe default
 
     # Find closest match
-    closest_key = min(MODEL_LAYER_COUNTS.keys(), key=lambda k: abs(int(k) - val))
+    closest_key = min(MODEL_LAYER_COUNTS.keys(), key=lambda k: abs(int(k.replace("b", "")) - val))
     return MODEL_LAYER_COUNTS[closest_key]
 
 
