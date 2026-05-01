@@ -82,7 +82,7 @@ async def lifespan(app: FastAPI):
     local = get_local_capacity()
 
     print(f"\n{'='*60}")
-    print(f"  🐼  HIVE COORDINATOR  –  {hostname}")
+    print(f"  [*] HIVE COORDINATOR  -  {hostname}")
     print(f"{'='*60}")
     print(f"  VRAM : {local.vram_total_mb:,} MB  ({len(local.gpus)} GPU(s))")
     print(f"  RAM  : {local.ram_total_mb:,} MB")

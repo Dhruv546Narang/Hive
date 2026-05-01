@@ -153,7 +153,7 @@ def animate_banner(model, gpu, ram, git_info, project):
     hex_lines = [
         f"{'╱ ╲':^{W}}",
         f"{'╱   ╲':^{W}}",
-        f"{'│  ⬡  │':^{W}}",
+        f"{'│  *  │':^{W}}",
         f"{'╲   ╱':^{W}}",
         f"{'╲ ╱':^{W}}",
         f"{'':^{W}}",
@@ -316,8 +316,26 @@ HELP_TEXT = f"""
 
 # ── Main Commands ────────────────────────────────────────────────────────
 def cmd_start(args):
-    print(f"Starting Hive Coordinator on port {settings.coordinator_port}...")
-    uvicorn.run("coordinator.main:app",host="0.0.0.0",port=settings.coordinator_port,reload=False,log_level="info")
+    import socket
+    from coordinator.capacity import get_local_capacity
+    
+    hostname = socket.gethostname()
+    local = get_local_capacity()
+    
+    print(f"\n{AMBER}{BOLD}  [*] HIVE COORDINATOR  –  {hostname}{RESET}")
+    print(f"  {'='*58}")
+    print(f"  {GRAY}Port{RESET}    {WHITE}{settings.coordinator_port}{RESET}")
+    print(f"  {GRAY}VRAM{RESET}    {WHITE}{local.vram_total_mb:,} MB ({len(local.gpus)} GPU){RESET}")
+    print(f"  {GRAY}RAM {RESET}    {WHITE}{local.ram_total_mb:,} MB{RESET}")
+    print(f"  {'='*58}")
+    print(f"  {GREEN}[+]{RESET} Starting API and Dashboard...")
+    print(f"  {GREEN}[+]{RESET} Dashboard available at {SKY}http://localhost:{settings.coordinator_port}{RESET}\n")
+    
+    # Hide the default uvicorn startup logs to keep it clean
+    import logging
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    
+    uvicorn.run("coordinator.main:app",host="0.0.0.0",port=settings.coordinator_port,reload=False,log_level="warning")
 
 def cmd_worker(args):
     from worker.main import main as w; w()
@@ -328,7 +346,7 @@ def cmd_status(args):
         r=httpx.get(f"http://localhost:{settings.coordinator_port}/api/cluster/status",timeout=5.0)
         r.raise_for_status(); d=r.json(); c=d["cluster"]
         print(box([
-            f"{AMBER}{BOLD}⬡  HIVE CLUSTER STATUS{RESET}","",
+            f"{AMBER}{BOLD}[*] HIVE CLUSTER STATUS{RESET}","",
             f"Nodes      {WHITE}{c['node_count']}{RESET}",
             f"VRAM       {WHITE}{c['total_vram_mb']:,} MB{RESET}",
             f"RAM        {WHITE}{c['total_ram_mb']:,} MB{RESET}",
@@ -339,7 +357,7 @@ def cmd_status(args):
             gpus=n.get("gpus",[]); gs=", ".join(g["name"] for g in gpus) if gpus else "CPU"
             print(f"  {WHITE}{n['hostname']}{RESET} ({n['role']}) — {gs}")
         for m in d.get("ollama_models",[]):
-            print(f"  {GREEN}✓{RESET} {m['name']} ({m.get('size',0)/(1024**3):.1f} GB)")
+            print(f"  {GREEN}[+]{RESET} {m['name']} ({m.get('size',0)/(1024**3):.1f} GB)")
         print()
     except Exception as e:
         print(f"{ROSE}Error: {e}{RESET}"); sys.exit(1)

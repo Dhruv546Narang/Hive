@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { fetchClusterStatus } from '../api';
+import { fetchClusterStatus, fetchShardPlan } from '../api';
 
 function StatCard({ label, value, sub, color }) {
   return (
@@ -46,14 +46,62 @@ function NodeCard({ node }) {
   );
 }
 
+function ClusterSharding({ plan }) {
+  if (!plan || !plan.nodes || plan.nodes.length === 0) return null;
+
+  return (
+    <div className="card" style={{ marginBottom: 32, padding: '24px 28px' }}>
+      <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ color: 'var(--amber-400)' }}>⬡</span> Distributed Layer Sharding
+      </h2>
+      <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 24 }}>
+        Visualizing layer distribution for <strong>{plan.model_id}</strong> ({plan.parameter_size})
+      </p>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        {plan.nodes.map((n, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <div style={{ width: 140, fontSize: 13, fontWeight: 500 }}>
+              {n.hostname} <span style={{ color: 'var(--text-secondary)' }}>({n.layers} layers)</span>
+            </div>
+            <div className="bar-track" style={{ flex: 1, height: 12, borderRadius: 6, background: 'rgba(255,255,255,0.03)' }}>
+              <div
+                className={`bar-fill ${i === 0 ? 'amber' : 'sky'}`}
+                style={{
+                  width: `${(n.layers / plan.total_layers) * 100}%`,
+                  borderRadius: 6,
+                  boxShadow: `0 0 12px ${i === 0 ? 'rgba(251,191,36,0.3)' : 'rgba(56,189,248,0.3)'}`
+                }}
+              />
+            </div>
+            <div style={{ width: 60, fontSize: 12, color: 'var(--text-secondary)', textAlign: 'right' }}>
+              {Math.round((n.layers / plan.total_layers) * 100)}%
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const [data, setData] = useState(null);
+  const [shardPlan, setShardPlan] = useState(null);
   const [err, setErr] = useState(null);
 
   const load = async () => {
     try {
       const d = await fetchClusterStatus();
       setData(d);
+      
+      // Try fetching a preview shard plan if there's any active model or at least nodes
+      try {
+        const plan = await fetchShardPlan();
+        setShardPlan(plan);
+      } catch (e) {
+        /* silent fallback */
+      }
+      
       setErr(null);
     } catch (e) { setErr(e.message); }
   };
@@ -93,10 +141,12 @@ export default function Dashboard() {
         <StatCard label="Usable Memory" value={`${(c.usable_memory_mb / 1024).toFixed(1)} GB`} sub="VRAM + RAM×0.6" color="emerald" />
       </div>
 
-      <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 16 }}>Nodes</h2>
+      <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 16 }}>Cluster Nodes</h2>
       <div className="card-grid" style={{ marginBottom: 32 }}>
         {nodes.map((n, i) => <NodeCard key={i} node={n} />)}
       </div>
+
+      {shardPlan && <ClusterSharding plan={shardPlan} />}
 
       {ollamaModels.length > 0 && (
         <>

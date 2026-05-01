@@ -90,7 +90,6 @@ async def chat_completion(
     max_tokens: int = 1024,
 ) -> Dict[str, Any]:
     """
-    """
     Send a non-streaming chat completion via Ollama's OpenAI compat endpoint.
     Returns the full response dict.
     """
@@ -130,7 +129,6 @@ async def chat_completion_stream(
     temperature: float = 0.7,
     max_tokens: int = 1024,
 ) -> AsyncGenerator[bytes, None]:
-    """
     """
     Stream a chat completion via Ollama's OpenAI compat endpoint.
     Yields raw SSE bytes as they arrive.

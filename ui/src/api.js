@@ -24,6 +24,18 @@ export async function fetchModels() {
   return r.json();
 }
 
+export async function fetchWorkers() {
+  const r = await fetch(`${API_BASE}/api/cluster/workers`);
+  if (!r.ok) throw new Error(`Status ${r.status}`);
+  return r.json();
+}
+
+export async function fetchShardPlan(model = "qwen3.5", params = "8B") {
+  const r = await fetch(`${API_BASE}/api/cluster/shard-plan?model=${model}&params=${params}`);
+  if (!r.ok) throw new Error(`Status ${r.status}`);
+  return r.json();
+}
+
 export async function sendChat(model, messages, onChunk) {
   const r = await fetch(`${API_BASE}/v1/chat/completions`, {
     method: 'POST',
