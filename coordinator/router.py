@@ -255,6 +255,7 @@ async def load_cluster_model(payload: dict):
             model_path=model_path,
             rpc_workers=workers,
             gpu_layers=99,
+            ctx_size=8192,
         )
         # Wait up to 30 seconds for it to be ready
         if not inference_server.wait_ready(timeout=30.0):
