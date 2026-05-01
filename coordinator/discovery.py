@@ -92,7 +92,7 @@ class DiscoveryService:
 
     async def stop(self):
         if self._browser:
-            self._browser.cancel()
+            await self._browser.async_cancel()
         if self._azc:
             if self._service_info:
                 await self._azc.async_unregister_service(self._service_info)

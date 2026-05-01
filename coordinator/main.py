@@ -81,16 +81,6 @@ async def lifespan(app: FastAPI):
     hostname = socket.gethostname()
     local = get_local_capacity()
 
-    print(f"\n{'='*60}")
-    print(f"  [*] HIVE COORDINATOR  -  {hostname}")
-    print(f"{'='*60}")
-    print(f"  VRAM : {local.vram_total_mb:,} MB  ({len(local.gpus)} GPU(s))")
-    print(f"  RAM  : {local.ram_total_mb:,} MB")
-    print(f"  Usable memory : {local.usable_memory_mb:,} MB")
-    print(f"  API  : http://0.0.0.0:{settings.coordinator_port}")
-    print(f"  UI   : http://localhost:{settings.coordinator_port}")
-    print(f"{'='*60}\n")
-
     # Start mDNS (async)
     props = {
         "vram": str(local.vram_total_mb),
