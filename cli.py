@@ -453,20 +453,8 @@ def cmd_pull(args):
         print(f"\n  {ROSE}Error: {e}{RESET}")
 
 
-# ── Chat Command (the main event) ────────────────────────────────────────
-def cmd_chat(args):
-    model = args.model
-    cwd = os.getcwd()
-    compact_mode = False
-    session_start = time.time()
-
-    # Detect system info (before alt screen so errors show normally)
-    gpu = detect_gpu()
-    ram = detect_ram()
-    git_info = detect_git()
-    project = detect_project()
-
-    # Check if the model is a local GGUF file
+def _load_model_for_chat(model: str) -> str:
+    """Checks if the model is GGUF, triggers cluster load, else checks Ollama. Returns actual model name."""
     from coordinator.model_downloader import list_downloaded, find_model
     ggufs = list_downloaded()
     
@@ -484,10 +472,8 @@ def cmd_chat(args):
                 break
                 
     if local_gguf:
-        print(f"  {AMBER}Starting distributed inference for {model}...{RESET}")
         import httpx
         from coordinator.config import settings
-        
         # Call the coordinator to load the model across the cluster
         try:
             r = httpx.post(
@@ -516,6 +502,23 @@ def cmd_chat(args):
             print(f"  {ROSE}Cannot find model '{model}' in Hive models or Ollama.{RESET}")
             print(f"  {GRAY}Use 'hive pull <model>' to download a model.{RESET}")
             sys.exit(1)
+            
+    return model
+
+# ── Chat Command (the main event) ────────────────────────────────────────
+def cmd_chat(args):
+    model = args.model
+    cwd = os.getcwd()
+    compact_mode = False
+    session_start = time.time()
+
+    # Detect system info (before alt screen so errors show normally)
+    gpu = detect_gpu()
+    ram = detect_ram()
+    git_info = detect_git()
+    project = detect_project()
+
+    model = _load_model_for_chat(model)
 
     # ── Enter alternate screen (old terminal content hidden, restored on exit)
     enter_alt_screen()
@@ -525,89 +528,44 @@ def cmd_chat(args):
     except (KeyboardInterrupt, EOFError):
         pass  # Clean exit on Ctrl+C at any point
     finally:
-        _blinker.stop()
         leave_alt_screen()
 
 # ── TUI Layout ───────────────────────────────────────────────────────────
-HEADER_ROWS = 8   # panda header box
+HEADER_ROWS = 6   # clean neo header
 FOOTER_ROWS = 2   # separator + input prompt
 
 def _get_size():
     return shutil.get_terminal_size((80, 24))
 
-# Eye positions in the header (terminal row, col) for blink animation
-_EYE_ROW = 5
-_EYE1_COL = 11
-_EYE2_COL = 14
-
-class PandaBlinker:
-    """Background thread that blinks the panda's eyes."""
-    def __init__(self):
-        self._stop = threading.Event()
-        self._thread = None
-    def start(self):
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._loop, daemon=True)
-        self._thread.start()
-    def _loop(self):
-        import random
-        while not self._stop.is_set():
-            self._stop.wait(random.uniform(2.5, 5.0))
-            if self._stop.is_set(): break
-            # Close eyes
-            sys.stdout.write(f"{SAVE_CURSOR}")
-            sys.stdout.write(f"\033[{_EYE_ROW};{_EYE1_COL}H{LILAC}─{RESET}")
-            sys.stdout.write(f"\033[{_EYE_ROW};{_EYE2_COL}H{LILAC}─{RESET}")
-            sys.stdout.write(f"{RESTORE_CURSOR}")
-            sys.stdout.flush()
-            self._stop.wait(0.15)
-            if self._stop.is_set(): break
-            # Open eyes
-            sys.stdout.write(f"{SAVE_CURSOR}")
-            sys.stdout.write(f"\033[{_EYE_ROW};{_EYE1_COL}H{WHITE}●{RESET}")
-            sys.stdout.write(f"\033[{_EYE_ROW};{_EYE2_COL}H{WHITE}●{RESET}")
-            sys.stdout.write(f"{RESTORE_CURSOR}")
-            sys.stdout.flush()
-    def stop(self):
-        self._stop.set()
-        if self._thread: self._thread.join(timeout=1)
-
-_blinker = PandaBlinker()
-
-def _draw_compact_header(model, cwd, gpu="", ram=""):
-    """Draw an 8-row header with panda + system info."""
+def _draw_neo_header(model, cwd, gpu="", ram=""):
+    """Draw a clean 6-row neo-glassmorphic header."""
     cols, _ = _get_size()
     w = min(cols - 4, 72)
-    c = AMBER
+    c = GRAY
     max_cwd = max(10, w - 30)
     dc = cwd if len(cwd) <= max_cwd else "..." + cwd[-(max_cwd-3):]
 
-    # Panda is 14 chars wide; info starts at col 18 inside box
     def pad_row(txt):
         stripped_len = len(txt.replace(BOLD,'').replace(DIM,'').replace(RESET,'').replace(AMBER,'').replace(GREEN,'').replace(LILAC,'').replace(SKY,'').replace(GRAY,'').replace(WHITE,'').replace(PURPLE,'').replace(CYAN,'').replace(ROSE,'').replace(ITALIC,''))
-        return txt + ' ' * max(0, w - 2 - stripped_len)
+        return txt + ' ' * max(0, w - 4 - stripped_len)
 
-    info1 = f"{BOLD}{LILAC}H I V E{RESET}  {GRAY}·{RESET}  {WHITE}{model}{RESET}"
-    info2 = f"{GRAY}{dc}{RESET}"
-    info3 = ""
-    info4 = f"{GRAY}read · write · edit · run · list · search{RESET}"
-    info5 = f"{GRAY}/help  /clear  /model  /cd  /exit{RESET}"
-    if gpu: info3 = f"{GRAY}{gpu}{RESET}"
+    info1 = f"{BOLD}{AMBER}[*] H I V E{RESET}  {GRAY}·{RESET}  {WHITE}{model}{RESET}"
+    info2 = f"{GRAY}Dir:{RESET}  {WHITE}{dc}{RESET}"
+    info3 = f"{GRAY}Sys:{RESET}  {WHITE}{gpu}{RESET}" if gpu else ""
+    info4 = f"{GRAY}Cmds: /help  /clear  /model  /cd  /stats  /exit{RESET}"
 
     rows = [
-        pad_row(f"   ╭──╮ ╭──╮"),
-        pad_row(f"   │{PURPLE}░░{RESET}├─┤{PURPLE}░░{RESET}│   {info1}"),
-        pad_row(f"   └┬─╯ ╰─┬┘   {info2}"),
-        pad_row(f"    │ {WHITE}●{RESET}  {WHITE}●{RESET} │   {info3}"),
-        pad_row(f"    │  {LILAC}▽{RESET}   │   {info4}"),
-        pad_row(f"    ╰──────╯   {info5}"),
+        pad_row(f"  {info1}"),
+        pad_row(f"  {info2}"),
+        pad_row(f"  {info3}"),
+        pad_row(f"  {info4}"),
     ]
 
     sys.stdout.write(f"\033[1;1H")
-    sys.stdout.write(f"  {c}╭{'─'*w}╮{RESET}\n")
+    sys.stdout.write(f"  {c}╭{'─'*(w-2)}╮{RESET}\n")
     for r in rows:
-        sys.stdout.write(f"  {c}│{RESET} {r}{c}│{RESET}\n")
-    sys.stdout.write(f"  {c}╰{'─'*w}╯{RESET}\n")
+        sys.stdout.write(f"  {c}│{RESET} {r} {c}│{RESET}\n")
+    sys.stdout.write(f"  {c}╰{'─'*(w-2)}╯{RESET}\n")
     sys.stdout.flush()
 
 def _draw_footer():
@@ -660,17 +618,12 @@ def _scroll_print(text):
 def _chat_loop(args, model, cwd, gpu, ram, git_info, project, session_start):
     compact_mode = False
 
-    # Phase 1: Show animated splash banner
-    animate_banner(model, gpu, ram, git_info, project)
-    time.sleep(0.8)
-
-    # Phase 2: Collapse to compact header + scroll layout
+    # Collapse to neo header + scroll layout
     sys.stdout.write(CLEAR_SCREEN)
     sys.stdout.flush()
-    _draw_compact_header(model, cwd, gpu=gpu, ram=ram)
+    _draw_neo_header(model, cwd, gpu=gpu, ram=ram)
     _setup_scroll_region()
     _draw_footer()
-    _blinker.start()
 
     # Welcome message in scroll region
     _scroll_print(f"  {GRAY}Ready. Type a message or /help for commands.{RESET}")
@@ -703,7 +656,6 @@ def _chat_loop(args, model, cwd, gpu, ram, git_info, project, session_start):
                 rest = user_input[len(cmd):].strip()
 
                 if cmd in ("/exit","/quit","/q"):
-                    _blinker.stop()
                     elapsed = time.time() - session_start
                     stats = agent.get_session_stats()
                     _scroll_print(f"  {GRAY}Session: {stats['messages']} msgs · {stats['tool_calls']} tools · {stats['tokens']} tokens · {elapsed:.0f}s{RESET}")
@@ -714,7 +666,7 @@ def _chat_loop(args, model, cwd, gpu, ram, git_info, project, session_start):
                     agent.clear_history()
                     # Redraw layout cleanly
                     sys.stdout.write(CLEAR_SCREEN); sys.stdout.flush()
-                    _draw_compact_header(model, cwd, gpu=gpu, ram=ram)
+                    _draw_neo_header(model, cwd, gpu=gpu, ram=ram)
                     _setup_scroll_region(); _draw_footer()
                     _scroll_print(f"  {GREEN}✓ Conversation cleared{RESET}")
                 elif cmd == "/help":
@@ -722,10 +674,15 @@ def _chat_loop(args, model, cwd, gpu, ram, git_info, project, session_start):
                         _scroll_print(line)
                 elif cmd == "/model":
                     if rest:
-                        agent = HiveAgent(model=rest, cwd=agent.cwd, os_name=platform.system(), context=context)
-                        model = rest
-                        _draw_compact_header(model, cwd, gpu=gpu, ram=ram)
-                        _scroll_print(f"  {GREEN}✓ Switched to {rest}{RESET}")
+                        try:
+                            _scroll_print(f"  {GRAY}Loading model {rest}...{RESET}")
+                            new_model = _load_model_for_chat(rest)
+                            agent = HiveAgent(model=new_model, cwd=agent.cwd, os_name=platform.system(), context=context)
+                            model = new_model
+                            _draw_neo_header(model, cwd, gpu=gpu, ram=ram)
+                            _scroll_print(f"  {GREEN}[+] Switched to {new_model}{RESET}")
+                        except SystemExit:
+                            _scroll_print(f"  {ROSE}Failed to switch model.{RESET}")
                     else:
                         _scroll_print(f"  {GRAY}Current: {model}{RESET}")
                 elif cmd == "/cd":
@@ -733,7 +690,7 @@ def _chat_loop(args, model, cwd, gpu, ram, git_info, project, session_start):
                         new = os.path.abspath(os.path.join(agent.cwd, rest))
                         if os.path.isdir(new):
                             agent.set_cwd(new); cwd = new
-                            _draw_compact_header(model, cwd, gpu=gpu, ram=ram)
+                            _draw_neo_header(model, cwd, gpu=gpu, ram=ram)
                             _scroll_print(f"  {GREEN}✓ {new}{RESET}")
                         else: _scroll_print(f"  {ROSE}Not a directory: {new}{RESET}")
                     else: _scroll_print(f"  {GRAY}{agent.cwd}{RESET}")
