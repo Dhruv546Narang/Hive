@@ -780,11 +780,10 @@ def _chat_loop(args, model, cwd, gpu, ram, git_info, project, session_start):
                 print_stats_bar(result)
 
         except (KeyboardInterrupt, EOFError):
-            _blinker.stop()
             elapsed = time.time() - session_start
             stats = agent.get_session_stats()
             _scroll_print(f"\n  {GRAY}Session: {stats['messages']} msgs · {stats['tool_calls']} tools · {elapsed:.0f}s{RESET}")
-            _scroll_print(f"  {AMBER}Goodbye! 🐼{RESET}")
+            _scroll_print(f"  {AMBER}Goodbye! ⬡{RESET}")
             time.sleep(0.5)
             break
 

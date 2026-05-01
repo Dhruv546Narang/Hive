@@ -151,7 +151,13 @@ class HiveAgent:
                 if on_tool_end:
                     on_tool_end(tool_name, tool_result)
 
-                self.messages.append({"role": "tool", "content": tool_result})
+                tool_id = tc.get("id") or f"call_{tool_name}"
+                self.messages.append({
+                    "role": "tool", 
+                    "content": str(tool_result),
+                    "tool_call_id": tool_id,
+                    "name": tool_name
+                })
 
         result.total_time = time.time() - start_time
         self.total_tokens_session += result.eval_count
