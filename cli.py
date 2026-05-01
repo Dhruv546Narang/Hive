@@ -409,7 +409,7 @@ def cmd_pull(args):
         total_gb = total / (1024**3)
         bar_w = 40
         filled = pct * bar_w // 100
-        bar = chr(9608) * filled + chr(9617) * (bar_w - filled)
+        bar = "#" * filled + "-" * (bar_w - filled)
         sys.stdout.write(f"\r  [{bar}] {pct}% ({dl_gb:.1f}/{total_gb:.1f} GB)")
         sys.stdout.flush()
         if downloaded >= total:
