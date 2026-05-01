@@ -448,19 +448,56 @@ def cmd_chat(args):
     git_info = detect_git()
     project = detect_project()
 
-    # Resolve model against Ollama
-    models = detect_ollama_models()
-    if models:
-        matched = None
-        for m in models:
-            if model.lower() in m.lower(): matched = m; break
-        if not matched:
-            matched = models[0]
-            print(f"  {GRAY}'{model}' not found, using '{matched}'{RESET}")
-        model = matched
+    # Check if the model is a local GGUF file
+    from coordinator.model_downloader import list_downloaded, find_model
+    ggufs = list_downloaded()
+    
+    # Is it in the registry/downloaded models?
+    reg_model = find_model(model)
+    local_gguf = None
+    if reg_model and reg_model['filename'] in [g['filename'] for g in ggufs]:
+        local_gguf = next(g['path'] for g in ggufs if g['filename'] == reg_model['filename'])
     else:
-        print(f"  {ROSE}Cannot reach Ollama. Is it running?{RESET}")
-        sys.exit(1)
+        # Check by filename directly
+        for g in ggufs:
+            if model.lower() in g['filename'].lower():
+                local_gguf = g['path']
+                model = g['filename']  # Update display name
+                break
+                
+    if local_gguf:
+        print(f"  {AMBER}Starting distributed inference for {model}...{RESET}")
+        import httpx
+        from coordinator.config import settings
+        
+        # Call the coordinator to load the model across the cluster
+        try:
+            r = httpx.post(
+                f"http://127.0.0.1:{settings.coordinator_port}/api/cluster/load_model",
+                json={"model_path": local_gguf},
+                timeout=15.0
+            )
+            r.raise_for_status()
+        except Exception as e:
+            print(f"  {ROSE}Failed to initialize distributed cluster (is the coordinator running?){RESET}")
+            print(f"  {GRAY}Run 'hive start' first.{RESET}")
+            sys.exit(1)
+            
+    else:
+        # Fallback to Ollama logic
+        models = detect_ollama_models()
+        if models:
+            matched = None
+            for m in models:
+                if model.lower() in m.lower(): matched = m; break
+            if not matched:
+                matched = models[0]
+                print(f"  {GRAY}'{model}' not found in Ollama, using '{matched}'{RESET}")
+            model = matched
+        else:
+            print(f"  {ROSE}Cannot find model '{model}' in Hive models or Ollama.{RESET}")
+            print(f"  {GRAY}Use 'hive pull <model>' to download a model.{RESET}")
+            sys.exit(1)
 
     # ── Enter alternate screen (old terminal content hidden, restored on exit)
     enter_alt_screen()

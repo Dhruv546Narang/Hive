@@ -238,6 +238,33 @@ async def cluster_workers():
     return {"workers": workers, "total": len(workers)}
 
 
+@router.post("/api/cluster/load_model")
+async def load_cluster_model(payload: dict):
+    """Start the distributed llama-server for a specific model."""
+    from coordinator.main import inference_server, get_rpc_endpoints
+    
+    model_path = payload.get("model_path")
+    if not model_path or not os.path.exists(model_path):
+        raise HTTPException(status_code=400, detail="Invalid model path")
+        
+    workers = get_rpc_endpoints()
+    
+    try:
+        # Start server asynchronously (doesn't block the API)
+        inference_server.start(
+            model_path=model_path,
+            rpc_workers=workers,
+            gpu_layers=99,
+        )
+        # Wait up to 30 seconds for it to be ready
+        if not inference_server.wait_ready(timeout=30.0):
+            raise HTTPException(status_code=500, detail="llama-server took too long to start")
+            
+        return {"status": "ok", "message": "Distributed inference server started"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Prometheus metrics endpoint ──────────────────────────────────────────────
 
 @router.get("/metrics")
