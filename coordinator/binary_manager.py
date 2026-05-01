@@ -20,7 +20,7 @@ CACHE_DIR = HIVE_HOME / "cache"
 
 GITHUB_API = "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest"
 
-# Binaries we need
+# Binaries we need (rpc-server has no llama- prefix in releases)
 REQUIRED_BINS = ["rpc-server", "llama-server", "llama-cli"]
 
 
@@ -83,8 +83,8 @@ def _save_version(tag: str):
 
 
 async def fetch_latest_release_url() -> tuple:
-    """Query GitHub API for the latest release download URL.
-    Returns (tag_name, download_url).
+    """Query GitHub API for the latest release download URLs.
+    Returns (tag_name, main_binary_url, cuda_dll_url_or_None).
     """
     pattern = _get_platform_asset_pattern()
     ext = _get_ext()
@@ -99,22 +99,27 @@ async def fetch_latest_release_url() -> tuple:
     tag = data.get("tag_name", "unknown")
     assets = data.get("assets", [])
 
-    # Find the matching asset
+    # Find the matching main binary asset (must start with 'llama-')
     candidates = []
+    cuda_dll_url = None
     for asset in assets:
         name = asset.get("name", "")
         url = asset.get("browser_download_url", "")
-        if pattern in name and name.endswith(ext):
+        if pattern in name and name.endswith(ext) and name.startswith("llama-"):
             candidates.append((name, url))
+        # Also find the CUDA runtime DLLs zip
+        if name.startswith("cudart-") and name.endswith(ext) and pattern.replace("bin-", "") in name:
+            cuda_dll_url = url
 
     if not candidates:
         # Fallback: try Vulkan (works without CUDA toolkit)
-        fallback = "vulkan" if "cuda" in pattern else pattern
+        fallback_pattern = pattern.replace("cuda-12", "vulkan")
         for asset in assets:
             name = asset.get("name", "")
             url = asset.get("browser_download_url", "")
-            if fallback in name and name.endswith(ext):
+            if fallback_pattern in name and name.endswith(ext) and name.startswith("llama-"):
                 candidates.append((name, url))
+        cuda_dll_url = None  # No CUDA DLLs needed for Vulkan
 
     if not candidates:
         raise RuntimeError(
@@ -129,49 +134,39 @@ async def fetch_latest_release_url() -> tuple:
             best = (name, url)
             break
 
-    return tag, best[1]
+    return tag, best[1], cuda_dll_url
 
 
-async def download_and_extract(
-    url: str,
-    tag: str,
-    on_progress=None,
-) -> Path:
-    """Download a release archive and extract binaries to BIN_DIR."""
-    BIN_DIR.mkdir(parents=True, exist_ok=True)
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+async def _download_file(url: str, dest: Path, on_progress=None):
+    """Download a file with progress callback."""
+    if dest.exists():
+        return
+    async with httpx.AsyncClient(follow_redirects=True) as client:
+        async with client.stream("GET", url, timeout=300.0) as resp:
+            resp.raise_for_status()
+            total = int(resp.headers.get("content-length", 0))
+            downloaded = 0
+            with open(dest, "wb") as f:
+                async for chunk in resp.aiter_bytes(8192):
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if on_progress and total > 0:
+                        on_progress(downloaded, total)
 
-    archive_name = url.split("/")[-1]
-    archive_path = CACHE_DIR / archive_name
 
-    # Download
-    if not archive_path.exists():
-        async with httpx.AsyncClient(follow_redirects=True) as client:
-            async with client.stream("GET", url, timeout=300.0) as resp:
-                resp.raise_for_status()
-                total = int(resp.headers.get("content-length", 0))
-                downloaded = 0
-                with open(archive_path, "wb") as f:
-                    async for chunk in resp.aiter_bytes(8192):
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        if on_progress and total > 0:
-                            on_progress(downloaded, total)
-
-    # Extract
-    extract_dir = CACHE_DIR / "extract"
-    if extract_dir.exists():
-        shutil.rmtree(extract_dir)
-    extract_dir.mkdir()
-
-    if archive_name.endswith(".zip"):
+def _extract_archive(archive_path: Path, extract_dir: Path):
+    """Extract zip or tar.gz."""
+    name = archive_path.name
+    if name.endswith(".zip"):
         with zipfile.ZipFile(archive_path, "r") as zf:
             zf.extractall(extract_dir)
-    elif archive_name.endswith(".tar.gz"):
+    elif name.endswith(".tar.gz"):
         with tarfile.open(archive_path, "r:gz") as tf:
             tf.extractall(extract_dir)
 
-    # Find and copy binaries
+
+def _copy_from_extract(extract_dir: Path) -> list:
+    """Copy required binaries and DLLs from extract dir to BIN_DIR."""
     found = []
     for root, dirs, files in os.walk(extract_dir):
         for fname in files:
@@ -180,23 +175,67 @@ async def download_and_extract(
                 src = Path(root) / fname
                 dst = BIN_DIR / fname
                 shutil.copy2(src, dst)
-                # Make executable on Unix
                 if platform.system() != "Windows":
                     os.chmod(dst, 0o755)
                 found.append(base)
-
-    # Also copy DLLs/shared libs (CUDA runtime, etc.)
-    for root, dirs, files in os.walk(extract_dir):
-        for fname in files:
-            if fname.endswith((".dll", ".so", ".dylib")):
+                print(f"[BinaryManager] Installed: {fname}")
+            elif fname.endswith((".dll", ".so", ".dylib")):
                 src = Path(root) / fname
                 dst = BIN_DIR / fname
                 if not dst.exists():
                     shutil.copy2(src, dst)
+    return found
 
-    # Cleanup extract dir
+
+async def download_and_extract(
+    url: str,
+    tag: str,
+    cuda_dll_url: str = None,
+    on_progress=None,
+    on_status=None,
+) -> Path:
+    """Download release archive(s) and extract binaries to BIN_DIR."""
+    BIN_DIR.mkdir(parents=True, exist_ok=True)
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Download main binary archive
+    archive_name = url.split("/")[-1]
+    archive_path = CACHE_DIR / archive_name
+    await _download_file(url, archive_path, on_progress=on_progress)
+
+    # Download CUDA DLLs separately if needed
+    if cuda_dll_url:
+        cuda_name = cuda_dll_url.split("/")[-1]
+        cuda_path = CACHE_DIR / cuda_name
+        if not cuda_path.exists():
+            if on_status:
+                on_status("Downloading CUDA runtime DLLs...")
+            await _download_file(cuda_dll_url, cuda_path)
+
+    # Extract main archive
+    extract_dir = CACHE_DIR / "extract"
+    if extract_dir.exists():
+        shutil.rmtree(extract_dir)
+    extract_dir.mkdir()
+
+    _extract_archive(archive_path, extract_dir)
+    found = _copy_from_extract(extract_dir)
+
+    # Extract CUDA DLLs if downloaded
+    if cuda_dll_url:
+        cuda_name = cuda_dll_url.split("/")[-1]
+        cuda_path = CACHE_DIR / cuda_name
+        if cuda_path.exists():
+            cuda_extract = CACHE_DIR / "extract_cuda"
+            if cuda_extract.exists():
+                shutil.rmtree(cuda_extract)
+            cuda_extract.mkdir()
+            _extract_archive(cuda_path, cuda_extract)
+            _copy_from_extract(cuda_extract)
+            shutil.rmtree(cuda_extract, ignore_errors=True)
+
+    # Cleanup
     shutil.rmtree(extract_dir, ignore_errors=True)
-
     _save_version(tag)
 
     missing = [b for b in REQUIRED_BINS if b not in found]
@@ -219,12 +258,12 @@ async def ensure_binaries(on_progress=None, on_status=None) -> Path:
     if on_status:
         on_status("Fetching latest llama.cpp release info...")
 
-    tag, url = await fetch_latest_release_url()
+    tag, url, cuda_url = await fetch_latest_release_url()
 
     if on_status:
         on_status(f"Downloading llama.cpp {tag}...")
 
-    await download_and_extract(url, tag, on_progress=on_progress)
+    await download_and_extract(url, tag, cuda_dll_url=cuda_url, on_progress=on_progress, on_status=on_status)
 
     if on_status:
         on_status(f"llama.cpp {tag} installed to {BIN_DIR}")

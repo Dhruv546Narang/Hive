@@ -22,7 +22,7 @@ async def async_main():
 
     # ── Auto-download llama.cpp binaries ──
     print(f"\n{'='*60}")
-    print(f"  🐼  HIVE WORKER  –  {hostname}")
+    print(f"  [*] HIVE WORKER  -  {hostname}")
     print(f"{'='*60}")
 
     def on_status(msg):
